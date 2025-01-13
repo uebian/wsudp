@@ -1,0 +1,14 @@
+[wsudp]
+mode = "client"
+
+[wsudp.client]
+n_mux = 64
+ws_url = "ws://127.0.0.1:10000/ws"
+udp_listen_addr = "127.0.0.1:40000"
+udp_target_addr = "127.0.0.1:50000"
+
+[wsudp.server]
+ws_listen_addr = "127.0.0.1:10000"
+udp_target_addr = "127.0.0.1:20000"
+udp_listen_addr = "127.0.0.1:30000"
+listen_path = "/ws"
