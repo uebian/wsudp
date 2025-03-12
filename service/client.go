@@ -14,7 +14,7 @@ type Client struct {
 
 func NewClient(cfg *config.Config) *Client {
 	client := &Client{
-		wspool:  &WSConnectionPool{},
+		wspool:  &WSConnectionPool{Collector: NewWSUDPCollector()},
 		closing: false,
 		cfg:     cfg,
 	}

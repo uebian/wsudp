@@ -35,6 +35,7 @@ type WSConnectionPool struct {
 	SentUDPPacket  atomic.Uint64
 	RecvWSPacket   atomic.Uint64
 	SentWSPacket   atomic.Uint64
+	Collector      *WSUDPCollector
 }
 
 func (conn *WSConnection) CanDial() bool {
@@ -121,6 +122,8 @@ func (c *WSConnectionPool) handleConnectionHeartbeat(conn *WSConnection) {
 }
 
 func (c *WSConnectionPool) handleConnectionListen(conn *WSConnection) {
+	c.Collector.wsReadCoroutineGauge.Inc()
+	defer c.Collector.wsReadCoroutineGauge.Dec()
 	for !conn.closing {
 		conn.redialM.RLock()
 		messageType, r, err := conn.conn.NextReader()
@@ -157,6 +160,8 @@ func (c *WSConnectionPool) handleConnectionListen(conn *WSConnection) {
 }
 
 func (c *WSConnectionPool) handleConnectionSent(conn *WSConnection) {
+	c.Collector.wsWriteCoroutineGauge.Inc()
+	defer c.Collector.wsWriteCoroutineGauge.Dec()
 	for !conn.closing {
 		select {
 

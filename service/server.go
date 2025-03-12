@@ -9,6 +9,8 @@ import (
 	//_ "net/http/pprof"
 
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/uebian/wsudp/config"
 )
 
@@ -24,7 +26,7 @@ var upgrader = websocket.Upgrader{
 }
 
 func NewServer(cfg *config.Config) *Server {
-	svc := &Server{wspool: &WSConnectionPool{}, cfg: cfg}
+	svc := &Server{wspool: &WSConnectionPool{Collector: NewWSUDPCollector()}, cfg: cfg}
 	return svc
 }
 
@@ -39,6 +41,7 @@ func (s *Server) Init() error {
 		return err
 	}
 	err = s.wspool.Init(udpListenAddr, udpTargetAddr)
+	prometheus.MustRegister(s.wspool.Collector)
 	return err
 }
 
@@ -52,7 +55,7 @@ func (s *Server) ListenAndServe() {
 	go s.wspool.webSocketToUDP()
 
 	http.HandleFunc(s.cfg.Server.ListenPath, s.handleWebSocket)
-	http.HandleFunc("/stats", s.handleStats)
+	http.Handle("/metrics", promhttp.Handler())
 
 	err := http.ListenAndServe(s.cfg.Server.WSListenAddr, nil)
 	if err != nil {
