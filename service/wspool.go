@@ -19,10 +19,8 @@ type WSConnection struct {
 	conn      *websocket.Conn
 	WSURL     string // Empty when on server side, disable autorestart
 	closing   bool
-	redialM   sync.Mutex
+	redialM   sync.RWMutex
 	redialC   *sync.Cond
-	resumeM   sync.Mutex
-	resumeC   *sync.Cond
 	heartbeat chan bool
 }
 
@@ -47,7 +45,6 @@ func (conn *WSConnection) Dial() {
 	for !conn.closing {
 		conn.redialM.Lock()
 		conn.redialC.Wait()
-		conn.redialM.Unlock()
 		var err error
 		if conn.CanDial() {
 			if conn.conn != nil {
@@ -60,7 +57,7 @@ func (conn *WSConnection) Dial() {
 				time.Sleep(5 * time.Second)
 			}
 		}
-		conn.resumeC.Broadcast()
+		conn.redialM.Unlock()
 	}
 	conn.conn.Close()
 }
@@ -79,10 +76,10 @@ func (c *WSConnectionPool) Init(udpListenAddr *net.UDPAddr, udpTargetAddr net.Ad
 
 	c.udpTargetAddr = udpTargetAddr
 
-	// c.wsSendChannel = make(chan *UDPPacket, 1024*16)
-	// c.udpSendChannel = make(chan *UDPPacket, 1024*16)
-	c.wsSendChannel = make(chan *UDPPacket)
-	c.udpSendChannel = make(chan *UDPPacket)
+	c.wsSendChannel = make(chan *UDPPacket, 1024)
+	c.udpSendChannel = make(chan *UDPPacket, 1024)
+	// c.wsSendChannel = make(chan *UDPPacket)
+	// c.udpSendChannel = make(chan *UDPPacket)
 
 	return nil
 }
@@ -94,14 +91,13 @@ func (c *WSConnectionPool) NewConnection(conn *WSConnection) error {
 		if err != nil {
 			return err
 		}
+		go conn.Dial()
 	}
 	conn.redialC = sync.NewCond(&conn.redialM)
-	conn.resumeC = sync.NewCond(&conn.resumeM)
 	conn.heartbeat = make(chan bool, 3)
 	go c.handleConnectionSent(conn)
 	go c.handleConnectionListen(conn)
 	go c.handleConnectionHeartbeat(conn)
-	go conn.Dial()
 	return nil
 }
 
@@ -109,9 +105,6 @@ func (c *WSConnectionPool) NewConnection(conn *WSConnection) error {
 func (conn *WSConnection) wsFail() bool {
 	if conn.CanDial() {
 		conn.redialC.Signal()
-		conn.resumeM.Lock()
-		conn.resumeC.Wait()
-		conn.resumeM.Unlock()
 		return true
 	} else {
 		conn.closing = true
@@ -129,8 +122,10 @@ func (c *WSConnectionPool) handleConnectionHeartbeat(conn *WSConnection) {
 
 func (c *WSConnectionPool) handleConnectionListen(conn *WSConnection) {
 	for !conn.closing {
+		conn.redialM.RLock()
 		messageType, r, err := conn.conn.NextReader()
 		if err != nil {
+			conn.redialM.RUnlock()
 			log.Printf("Failed to read message from WebSocket: %v", err)
 			if conn.wsFail() {
 				continue
@@ -139,10 +134,12 @@ func (c *WSConnectionPool) handleConnectionListen(conn *WSConnection) {
 			}
 		}
 		if messageType != websocket.BinaryMessage {
+			conn.redialM.RUnlock()
 			continue
 		}
 		packet := c.bufferPool.Get().(*UDPPacket)
 		n, err := r.Read(packet.content[:])
+		conn.redialM.RUnlock()
 		// log.Printf("[DEBUG %s] Packet received from Websocket", time.Now().String())
 		if err != nil {
 			log.Printf("Failed to read message from WebSocket: %v", err)
@@ -171,7 +168,9 @@ func (c *WSConnectionPool) handleConnectionSent(conn *WSConnection) {
 				c.wsSendChannel <- packet
 				return
 			}
+			conn.redialM.RLock()
 			err := conn.conn.WriteMessage(websocket.BinaryMessage, packet.content[:packet.n])
+			conn.redialM.RUnlock()
 			// log.Printf("[DEBUG %s] Packet sent to Websocket", time.Now().String())
 			if err != nil {
 				log.Printf("Failed to send message to WebSocket: %v", err)
@@ -192,7 +191,9 @@ func (c *WSConnectionPool) handleConnectionSent(conn *WSConnection) {
 			if conn.closing {
 				return
 			}
+			conn.redialM.RLock()
 			err := conn.conn.WriteMessage(websocket.PingMessage, nil)
+			conn.redialM.RUnlock()
 			if err != nil {
 				log.Printf("Failed to send message to WebSocket: %v", err)
 				if conn.wsFail() {
